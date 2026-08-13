@@ -1,2 +1,3 @@
 Data_process/*.csv filter=lfs diff=lfs merge=lfs -text
 Data_process/*.parquet filter=lfs diff=lfs merge=lfs -text
+tabular_embedding/*.npy filter=lfs diff=lfs merge=lfs -text
