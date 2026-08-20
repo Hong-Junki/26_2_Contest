@@ -35,6 +35,83 @@
 Text·Image·Tabular encoder는 추천 시 다시 학습하지 않습니다. 미리 만들어진 game embedding은
 고정하고, 실제 train interaction으로 학습한 user embedding과 내적해 점수를 계산합니다.
 
+## 모델을 이해하기 위한 기본 개념
+
+### MF: Matrix Factorization
+
+MF는 **Matrix Factorization(행렬 분해)**의 약자입니다. 사용자–게임 interaction 행렬을
+직접 저장하는 대신 사용자와 게임을 각각 작은 잠재 벡터로 표현합니다. 이 프로젝트에서는
+각각 64차원이며, 두 벡터의 내적이 클수록 해당 사용자가 게임을 선호한다고 봅니다.
+
+```text
+user embedding (64D) · game embedding (64D) = 추천 점수
+```
+
+MF는 게임 설명이나 이미지를 읽지 않고 “이 게임을 좋아한 사용자들이 다른 어떤 게임을 함께
+좋아했는가?”라는 협업 패턴을 학습합니다. 희소한 Steam interaction에서 강한 baseline이고
+전체 카탈로그 점수를 빠르게 계산할 수 있어 사용했습니다. 반면 interaction이 없는 신규 사용자와
+신규 게임에는 약하고 인기 게임 쪽으로 편향될 수 있습니다.
+
+### BPR: Bayesian Personalized Ranking
+
+BPR은 **Bayesian Personalized Ranking(베이지안 개인화 순위 학습)**의 약자입니다. 정확한
+평점이나 좋아할 확률을 예측하는 대신 사용자가 긍정적으로 평가한 게임을 관측하지 않은 게임보다
+위에 놓도록 학습합니다.
+
+```text
+사용자 u가 좋아한 게임 i, 관측하지 않은 게임 j
+학습 목표: score(u, i) > score(u, j)
+```
+
+개념적인 loss는 다음과 같습니다.
+
+```python
+loss = -log(sigmoid(score_positive - score_negative))
+```
+
+우리의 목적은 별점 예측이 아니라 Top-K 추천 순서를 잘 만드는 것이므로 Recall@K, NDCG@K와
+목표가 잘 맞는 BPR을 사용했습니다.
+
+### MF와 BPR의 관계
+
+둘은 서로 경쟁하는 모델명이 아니라 역할이 다릅니다.
+
+```text
+MF  = 사용자와 게임을 어떤 벡터로 표현할 것인가
+BPR = positive 게임이 negative 게임보다 위에 오도록 어떻게 학습할 것인가
+```
+
+따라서 `mf_bpr`은 사용자 ID와 게임 ID에서 각각 학습 가능한 embedding을 만들고, 그 embedding을
+BPR loss로 학습한 모델입니다.
+
+### MF-BPR과 Multimodal-BPR의 차이
+
+| 구분 | MF-BPR | Multimodal-BPR |
+|---|---|---|
+| 사용자 표현 | 학습 가능한 64D user embedding | 학습 가능한 64D user embedding |
+| 게임 표현 | 게임 ID별 학습 가능한 embedding | Text + Image + Tabular로 미리 만든 고정 64D embedding |
+| 강점 | 사용자 행동·협업 패턴 | 게임 자체 특성·long-tail 탐색 |
+| 약점 | 신규 게임, 인기 편향 | 협업 신호를 직접 표현하지 못함 |
+
+`mf_multimodal_hybrid`은 두 모델의 점수를 결합해 협업 패턴과 게임 자체 정보를 함께 사용합니다.
+현재 validation에서는 MF 40%, Multimodal 60%가 선택됐습니다.
+
+### Negative sampling 해석 주의
+
+BPR 학습에서는 사용자가 긍정적으로 평가한 게임을 positive로 두고, 그 사용자의 train 이력에서
+관측되지 않은 게임을 negative 후보로 표본 추출합니다. 여기서 negative는 “싫어한 게임”이 아니라
+**아직 관측되지 않은 게임**입니다. 실제로는 사용자가 좋아하지만 아직 플레이하지 않은 게임도
+negative로 뽑힐 수 있으므로 추천 점수를 절대적인 선호 확률로 해석하면 안 됩니다.
+
+한 문장으로 정리하면 다음과 같습니다.
+
+```text
+MF = 사람들이 무엇을 함께 좋아했는가
+BPR = 좋아한 게임을 추천 목록 위쪽에 놓는 학습 방법
+Multimodal = 게임 내용·이미지·정형 특성이 얼마나 잘 맞는가
+Hybrid = 행동 정보와 게임 자체 정보를 함께 사용
+```
+
 ## 가장 빠른 실행
 
 repository 루트에서 실행합니다. `recommendation_mvp` 폴더 안으로 이동할 필요가 없습니다.
