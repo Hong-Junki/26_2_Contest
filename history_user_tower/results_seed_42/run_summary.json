@@ -9,5 +9,13 @@
   "strict_cold_definition": "app_id absent from every Train interaction",
   "test_positive_strict_cold": 1724,
   "best_validation_bpr_loss": 0.5651590730437112,
-  "caveat": "catalog-cold evaluation; the provided game bank includes catalog aggregates built outside the interaction split"
+  "chronology_audit": {
+    "split_method": "per-user chronological 80/10/10",
+    "train_to_validation_users_checked": 50000,
+    "train_to_validation_violations": 0,
+    "validation_to_test_users_checked": 50000,
+    "validation_to_test_violations": 0
+  },
+  "cohort_selection_caveat": "the upstream 50k debug cohort was sampled after filtering users by full-period valid interaction count; User Tower histories and targets remain chronological, but cohort eligibility is not train-only",
+  "catalog_feature_caveat": "catalog-cold evaluation; the provided game bank includes catalog aggregates built outside the interaction split"
 }

@@ -79,7 +79,38 @@ def load_game_bank(prefix: Path) -> tuple[np.ndarray, np.ndarray, dict[int, int]
         raise ValueError(f"expected {(len(ids), 64)} game bank, got {bank.shape}")
     if len(np.unique(ids)) != len(ids) or not np.isfinite(bank).all():
         raise ValueError("invalid game bank IDs or values")
+    norms = np.linalg.norm(bank, axis=1)
+    if not np.allclose(norms, 1.0, atol=1e-4):
+        raise ValueError(
+            f"game bank must be L2-normalized; norm range={norms.min():.6f}..{norms.max():.6f}"
+        )
     return ids, bank, {int(app): row for row, app in enumerate(ids)}
+
+
+def validate_split_chronology(train: pd.DataFrame, validation: pd.DataFrame,
+                              test: pd.DataFrame) -> dict[str, int | str]:
+    """Assert user-wise (date, review_id) chronology across split boundaries."""
+    result: dict[str, int | str] = {"split_method": "per-user chronological 80/10/10"}
+    for left, left_name, right, right_name in (
+        (train, "train", validation, "validation"),
+        (validation, "validation", test, "test"),
+    ):
+        last = left.sort_values(["user_id", "date", "review_id"]).groupby("user_id").tail(1).set_index("user_id")
+        first = right.sort_values(["user_id", "date", "review_id"]).groupby("user_id").head(1).set_index("user_id")
+        common = last.index.intersection(first.index)
+        violations = (
+            (last.loc[common, "date"] > first.loc[common, "date"])
+            | (
+                (last.loc[common, "date"] == first.loc[common, "date"])
+                & (last.loc[common, "review_id"] > first.loc[common, "review_id"])
+            )
+        )
+        count = int(violations.sum())
+        if count:
+            raise ValueError(f"{left_name}->{right_name} chronology violations: {count}")
+        result[f"{left_name}_to_{right_name}_users_checked"] = int(len(common))
+        result[f"{left_name}_to_{right_name}_violations"] = count
+    return result
 
 
 def add_item_rows(frame: pd.DataFrame, app_to_row: dict[int, int]) -> pd.DataFrame:
@@ -309,6 +340,7 @@ def main() -> None:
     train = add_item_rows(pd.read_parquet(args.data_dir / "debug_train.parquet"), app_to_row)
     validation = add_item_rows(pd.read_parquet(args.data_dir / "debug_validation.parquet"), app_to_row)
     test = add_item_rows(pd.read_parquet(args.data_dir / "debug_test.parquet"), app_to_row)
+    chronology_audit = validate_split_chronology(train, validation, test)
     candidates = pd.read_parquet(args.test_candidates)
 
     positive_train = train[train.is_recommended].copy()
@@ -395,7 +427,9 @@ def main() -> None:
         "catalog_games": len(catalog_ids), "strict_cold_definition": "app_id absent from every Train interaction",
         "test_positive_strict_cold": int((~test.loc[test.is_recommended, "app_id"].isin(train_catalog)).sum()),
         "best_validation_bpr_loss": best_loss,
-        "caveat": "catalog-cold evaluation; the provided game bank includes catalog aggregates built outside the interaction split",
+        "chronology_audit": chronology_audit,
+        "cohort_selection_caveat": "the upstream 50k debug cohort was sampled after filtering users by full-period valid interaction count; User Tower histories and targets remain chronological, but cohort eligibility is not train-only",
+        "catalog_feature_caveat": "catalog-cold evaluation; the provided game bank includes catalog aggregates built outside the interaction split",
     }
     (args.output_dir / "run_summary.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
     print("HISTORY_USER_TOWER_OK")

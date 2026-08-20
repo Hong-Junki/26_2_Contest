@@ -67,6 +67,16 @@ negative는 해당 사용자의 Train 관측 게임이 아닌 catalog 게임에�
 - strict Cold: positive/negative 여부와 무관하게 **Train에 app_id가 한 번도 없던 게임**
 - 모델 선택에 Test 결과를 사용하지 않음
 
+시간 split은 전역 달력 cutoff가 아닙니다. 각 사용자의 interaction을 `(date, review_id)`로 정렬한 뒤
+앞 80%/다음 10%/마지막 10%로 나눈 **사용자별 chronological split**입니다. 50,000명 전체에 대해
+Train→Validation 및 Validation→Test 경계 순서 위반이 0건임을 다시 확인했습니다.
+
+다만 upstream 50k debug cohort는 split 전에 전체 기간의 유효 interaction이 5개 이상인 사용자를
+후보로 삼아 무작위 추출했습니다. User Tower의 history/target에는 미래 데이터가 들어가지 않지만,
+사용자 cohort eligibility 자체는 train-only가 아닙니다. 기존 모델과의 동일 조건 비교를 위해 현재
+cohort를 유지했으며, 엄격한 최종 실험에서는 전체 사용자에게 먼저 시간 split을 적용한 다음 Train
+interaction만으로 사용자를 고르는 것이 맞습니다.
+
 `sampled` 평가는 기존 파이프라인과 같은 1 positive + 99 negative 문제입니다. `full_catalog`는 동일한
 9,992개 test query의 target을 전체 50,872개 게임과 비교합니다. sampled 성능이 실제 전체 catalog
 추천 성능을 과대평가할 수 있다는 점이 이번 실험에서 확인됐습니다.
@@ -87,6 +97,62 @@ python history_user_tower/experiment.py --epochs 15 --patience 4 --full-catalog
 
 CPU 기준 seed 42 전체 실험은 이 환경에서 약 1분대가 걸렸습니다. 경로는 CLI 인자로 바꿀 수 있습니다.
 
+## 기존 사용자와 신규 사용자 추론
+
+첨부 설계에서 요구한 공통 추론 계약을 `inference.py`에 구현했습니다.
+
+```python
+from history_user_tower.inference import HistoryUserEncoder
+
+encoder = HistoryUserEncoder()
+
+# 기존 사용자: 실제 positive history와 관측 플레이타임
+existing_user = encoder.encode_user(
+    history_app_ids=[292030, 489830],
+    history_hours=[120.0, 45.0],
+)
+
+# 신규 사용자: 선택 게임 + 장르 prototype, 동일한 MLP 사용
+new_user = encoder.encode_user(
+    history_app_ids=[292030],
+    selected_genres=["RPG", "Adventure"],
+)
+
+recommendations = encoder.recommend(
+    history_app_ids=[292030],
+    selected_genres=["RPG"],
+    top_k=10,
+)
+```
+
+`encode_user(...)`는 항상 L2-normalized `(64,)` `float32`를 반환합니다. 신규 사용자는 플레이타임이
+없으므로 선택 게임과 장르 prototype을 동일 가중치로 pooling합니다. 장르 prototype은 해당 장르의
+frozen multimodal game embedding 평균이며 `genre_prototypes.npy/.csv`에 저장했습니다.
+
+현재 MLP는 sampled 후보에는 강하지만 full-catalog에서는 hours pooling보다 낮았으므로 운영 비교 시
+`apply_mlp=False`도 반드시 함께 평가해야 합니다. `False`는 MLP 전의 normalized intent/history
+vector를 반환합니다.
+
+## 주의사항 재감사 결과
+
+| 점검 항목 | 결과 |
+|---|---|
+| User/Game 출력 차원 | 모두 64D |
+| 동일 latent space 학습 | frozen 실제 Game bank와 dot-product BPR 사용 |
+| Game bank 고정 | 학습 중 frozen |
+| history 입력 | Train positive만 사용 |
+| `hours` 사용 위치 | 과거 history 가중치에만 사용 |
+| target 포함 여부 | prefix 생성 후 target을 추가하므로 leakage 없음 |
+| Validation/Test history | Train / Train+Validation까지만 사용 |
+| User ID 의존성 | 없음; 임의 history/intent를 입력 가능 |
+| negative | 사용자의 Train 관측 게임을 제외한 uniform random negative |
+| 정규화 | Game/User/prototype 모두 L2 norm 1 |
+| `app_id` alignment | `.csv` 순서와 `.npy` row를 assert |
+| 재사용 함수 | `encode_user(...) -> np.ndarray(shape=(64,))` 제공 |
+
+따라서 기존 학습 결과를 폐기하거나 다시 학습할 오류는 없었습니다. 수정이 필요했던 부분은 공통 추론
+함수와 장르 intent 경로의 부재, 그리고 split/cohort 설명의 정확성입니다. 이 부분을 보완했습니다.
+
 ## 산출물
 
 `results_seed_42/`의 파일은 다음과 같습니다.
@@ -100,6 +166,7 @@ CPU 기준 seed 42 전체 실험은 이 환경에서 약 1분대가 걸렸습니
 | `user_profiles_hours.npy` | 현재 권장 hours-weighted `(49,848, 64)` profile |
 | `user_profiles_simple.npy` | 비교용 simple-mean profile |
 | `user_embeddings.csv` | `user_id → embedding_row` 매핑 |
+| `genre_prototypes.npy/.csv` | 신규 사용자 장르 intent용 26개 normalized prototype |
 | `run_summary.json` | 입력 규모, Cold 정의, 주의사항 |
 
 세 `.npy` 파일은 모두 동일한 `user_embeddings.csv` 행 매핑을 사용합니다. Fusion 담당자는 먼저
