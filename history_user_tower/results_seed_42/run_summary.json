@@ -1,0 +1,13 @@
+{
+  "recommendation_csv_used": false,
+  "interaction_split": "chronological per user; train -> validation -> test",
+  "train_rows": 451741,
+  "train_positive_rows": 385030,
+  "prefix_training_examples": 335288,
+  "profile_users": 49848,
+  "catalog_games": 50872,
+  "strict_cold_definition": "app_id absent from every Train interaction",
+  "test_positive_strict_cold": 1724,
+  "best_validation_bpr_loss": 0.5651590730437112,
+  "caveat": "catalog-cold evaluation; the provided game bank includes catalog aggregates built outside the interaction split"
+}
