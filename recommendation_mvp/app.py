@@ -139,7 +139,7 @@ def build_game_card_html(row: pd.Series) -> str:
 
 def render_game_cards(frame: pd.DataFrame) -> None:
     """Render recommendations as two-column visual cards, grouped by model."""
-    st.markdown(
+    st.html(
         """
         <style>
         .steam-game-card {
@@ -204,8 +204,7 @@ def render_game_cards(frame: pd.DataFrame) -> None:
         }
         .steam-reason { margin-top: 0.55rem; font-size: 0.88rem; line-height: 1.42; }
         </style>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     model_groups = list(frame.groupby("model", sort=False)) if "model" in frame else [("추천", frame)]
@@ -219,7 +218,9 @@ def render_game_cards(frame: pd.DataFrame) -> None:
             columns = st.columns(2)
             for card_index, (_, row) in enumerate(ordered.iterrows()):
                 with columns[card_index % 2]:
-                    st.markdown(build_game_card_html(row), unsafe_allow_html=True)
+                    # st.html renders nested card elements as HTML. st.markdown
+                    # can expose a nested <div> as literal text in some versions.
+                    st.html(build_game_card_html(row))
 
 
 def render_results(frame: pd.DataFrame, filename: str) -> None:
