@@ -6,12 +6,14 @@ import json
 import sys
 from pathlib import Path
 
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mvp_recommendation.cold_start import ColdStartRecommendationPipeline  # noqa: E402
 from mvp_recommendation.inference import KnownUserRecommendationPipeline  # noqa: E402
+from recommendation_mvp.app import build_game_card_html, steam_header_image_url  # noqa: E402
 
 
 def main() -> None:
@@ -55,9 +57,23 @@ def main() -> None:
     )
     assert summary["selected_bank"] == "frozen_concat"
     assert summary["test_used_for_selection"] is False
+    card = build_game_card_html(pd.Series({
+        "rank": 1,
+        "app_id": 292030,
+        "title": "The Witcher 3 <script>",
+        "model": "mf_multimodal_hybrid",
+        "rating": "Overwhelmingly Positive",
+        "positive_ratio": 96,
+        "price_final": 39.99,
+        "recommendation_reason": "liked-game similarity",
+    }))
+    assert steam_header_image_url(292030).endswith("/steam/apps/292030/header.jpg")
+    assert "<script>" not in card and "&lt;script&gt;" in card
+    assert "data-fallback=" in card and "steam-image-placeholder" in card
+    assert "https://store.steampowered.com/app/292030" in card
     print(
         f"known={known_result.shape}; liked={liked.shape}; tags={tags.shape}; "
-        f"alpha_mf={known.alpha_multimodal_mf:.2f}"
+        f"alpha_mf={known.alpha_multimodal_mf:.2f}; card_html={len(card):,} chars"
     )
     print("MULTIMODAL_PIPELINE_VALIDATION_OK")
 

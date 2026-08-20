@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import sys
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -82,34 +83,175 @@ def csv_bytes(frame: pd.DataFrame) -> bytes:
     return ("\ufeff" + buffer.getvalue()).encode("utf-8")
 
 
+def steam_header_image_url(app_id: int) -> str:
+    """Return Steam's public store header image URL for an app_id."""
+    return (
+        "https://shared.akamai.steamstatic.com/store_item_assets/"
+        f"steam/apps/{int(app_id)}/header.jpg"
+    )
+
+
+def build_game_card_html(row: pd.Series) -> str:
+    """Build one escaped recommendation card with a resilient image fallback."""
+    app_id = int(row["app_id"])
+    rank = int(row["rank"])
+    title = escape(str(row.get("title", f"app_id {app_id}")), quote=True)
+    model = escape(str(row.get("model", "")), quote=True)
+    reason = escape(str(row.get("recommendation_reason", "")), quote=True)
+    rating = escape(str(row.get("rating", "정보 없음")), quote=True)
+    positive = row.get("positive_ratio")
+    price = row.get("price_final")
+    positive_text = (
+        f"{int(positive)}% 긍정" if pd.notna(positive) else "긍정 비율 정보 없음"
+    )
+    if pd.isna(price):
+        price_text = "가격 정보 없음"
+    elif float(price) == 0:
+        price_text = "무료"
+    else:
+        price_text = f"${float(price):.2f}"
+    image_url = steam_header_image_url(app_id)
+    legacy_url = f"https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+    store_url = f"https://store.steampowered.com/app/{app_id}"
+    # If both current and legacy CDN paths fail, the card keeps a neutral
+    # gradient background and hides the broken image icon.
+    return f"""
+    <article class="steam-game-card">
+      <div class="steam-image-wrap">
+        <img src="{image_url}" data-fallback="{legacy_url}" alt="{title} header image"
+             loading="lazy"
+             onerror="if(this.dataset.fallback){{this.src=this.dataset.fallback;this.dataset.fallback='';}}
+                      else{{this.style.display='none';}}">
+        <span class="steam-image-placeholder">Steam 이미지 없음</span>
+        <span class="steam-rank">#{rank}</span>
+      </div>
+      <div class="steam-card-body">
+        <a class="steam-title" href="{store_url}" target="_blank" rel="noopener noreferrer">
+          {title}
+        </a>
+        <div class="steam-meta">{rating} · {positive_text} · {price_text}</div>
+        {f'<div class="steam-model">{model}</div>' if model else ''}
+        {f'<div class="steam-reason">{reason}</div>' if reason else ''}
+      </div>
+    </article>
+    """
+
+
+def render_game_cards(frame: pd.DataFrame) -> None:
+    """Render recommendations as two-column visual cards, grouped by model."""
+    st.markdown(
+        """
+        <style>
+        .steam-game-card {
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            border-radius: 14px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+            background: rgba(128, 128, 128, 0.06);
+            min-height: 100%;
+        }
+        .steam-image-wrap {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 460 / 215;
+            overflow: hidden;
+            background: linear-gradient(135deg, #243447, #101820);
+        }
+        .steam-image-wrap img {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        .steam-image-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #b8c5d1;
+            font-size: 0.85rem;
+        }
+        .steam-rank {
+            position: absolute;
+            z-index: 2;
+            top: 0.55rem;
+            left: 0.55rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            color: white;
+            background: rgba(0, 0, 0, 0.78);
+            font-weight: 700;
+        }
+        .steam-card-body { padding: 0.8rem 0.9rem 0.95rem; }
+        .steam-title {
+            color: inherit !important;
+            font-size: 1.05rem;
+            font-weight: 750;
+            text-decoration: none !important;
+        }
+        .steam-title:hover { text-decoration: underline !important; }
+        .steam-meta { margin-top: 0.35rem; font-size: 0.84rem; opacity: 0.78; }
+        .steam-model {
+            display: inline-block;
+            margin-top: 0.5rem;
+            padding: 0.15rem 0.45rem;
+            border-radius: 999px;
+            background: rgba(108, 92, 231, 0.15);
+            font-size: 0.75rem;
+        }
+        .steam-reason { margin-top: 0.55rem; font-size: 0.88rem; line-height: 1.42; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    model_groups = list(frame.groupby("model", sort=False)) if "model" in frame else [("추천", frame)]
+    tabs = st.tabs([str(name) for name, _ in model_groups]) if len(model_groups) > 1 else None
+    for group_index, (name, group) in enumerate(model_groups):
+        container = tabs[group_index] if tabs is not None else st.container()
+        with container:
+            if tabs is None and "model" in frame:
+                st.caption(f"추천 모델: {name}")
+            ordered = group.sort_values("rank", kind="stable")
+            columns = st.columns(2)
+            for card_index, (_, row) in enumerate(ordered.iterrows()):
+                with columns[card_index % 2]:
+                    st.markdown(build_game_card_html(row), unsafe_allow_html=True)
+
+
 def render_results(frame: pd.DataFrame, filename: str) -> None:
     st.success(f"{len(frame):,}개 추천 결과를 생성했습니다.")
-    display_columns = [
-        column
-        for column in [
-            "rank", "title", "app_id", "model", "score", "rating", "positive_ratio",
-            "price_final", "matched_preferred_tags", "recommendation_reason", "original_rank",
+    render_game_cards(frame)
+    with st.expander("표 형태로 보기"):
+        display_columns = [
+            column
+            for column in [
+                "rank", "title", "app_id", "model", "score", "rating", "positive_ratio",
+                "price_final", "matched_preferred_tags", "recommendation_reason", "original_rank",
+            ]
+            if column in frame.columns
         ]
-        if column in frame.columns
-    ]
-    st.dataframe(
-        frame[display_columns],
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "rank": st.column_config.NumberColumn("순위", format="%d"),
-            "title": "게임",
-            "app_id": st.column_config.NumberColumn("app_id", format="%d"),
-            "model": "모델",
-            "score": st.column_config.NumberColumn("점수", format="%.4f"),
-            "rating": "Steam 평가",
-            "positive_ratio": st.column_config.NumberColumn("긍정 비율", format="%d%%"),
-            "price_final": st.column_config.NumberColumn("가격", format="$%.2f"),
-            "matched_preferred_tags": "일치 태그",
-            "recommendation_reason": "추천 이유",
-            "original_rank": st.column_config.NumberColumn("원래 순위", format="%d"),
-        },
-    )
+        st.dataframe(
+            frame[display_columns],
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "rank": st.column_config.NumberColumn("순위", format="%d"),
+                "title": "게임",
+                "app_id": st.column_config.NumberColumn("app_id", format="%d"),
+                "model": "모델",
+                "score": st.column_config.NumberColumn("점수", format="%.4f"),
+                "rating": "Steam 평가",
+                "positive_ratio": st.column_config.NumberColumn("긍정 비율", format="%d%%"),
+                "price_final": st.column_config.NumberColumn("가격", format="$%.2f"),
+                "matched_preferred_tags": "일치 태그",
+                "recommendation_reason": "추천 이유",
+                "original_rank": st.column_config.NumberColumn("원래 순위", format="%d"),
+            },
+        )
     st.download_button(
         "CSV 다운로드",
         data=csv_bytes(frame),
