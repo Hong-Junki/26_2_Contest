@@ -1,5 +1,8 @@
 # Multimodal Steam Recommendation MVP
 
+> 서비스 실행과 팀 공유를 위한 최신 통합 안내서는 [`README.md`](./README.md)입니다.
+> 이 문서는 멀티모달 전환 시점의 모델 선택과 실험 결과를 간단히 보존합니다.
+
 기존 MF/Text 추천 파이프라인에 팀의 `game_fusion` 결과를 연결한 버전입니다.
 게임당 text(MiniLM), image(CLIP), tabular(SVD) 정보를 하나의 64차원 벡터로 사용합니다.
 

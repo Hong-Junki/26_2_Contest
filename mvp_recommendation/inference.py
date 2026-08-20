@@ -328,7 +328,13 @@ class KnownUserRecommendationPipeline:
                             "text_catalog_rank": int(text_rank[row]),
                             "recommendation_source": source,
                             "recommendation_reason": reason,
-                            "alpha_mf": self.alpha_mf if model == "balanced_hybrid" else float(model == "mf_bpr"),
+                            "alpha_mf": (
+                                self.alpha_mf
+                                if model == "balanced_hybrid"
+                                else self.alpha_multimodal_mf
+                                if model == "mf_multimodal_hybrid"
+                                else float(model == "mf_bpr")
+                            ),
                             "alpha_text": self.alpha_text if model == "balanced_hybrid" else float(model == "text_bpr"),
                             "alpha_multimodal": (
                                 1.0 - self.alpha_multimodal_mf

@@ -1,261 +1,204 @@
-# Steam 최종 추천 파이프라인
+# Steam 멀티모달 추천 MVP
 
-학습이 끝난 MF-BPR와 Text-BPR 체크포인트를 사용해 기존 사용자에게 전체 Steam 게임
-50,872개 중 아직 관측되지 않은 게임 Top-K를 추천합니다. 새로운 모델을 재학습하는 코드가
-아니라 저장된 모델을 실제 추천 목록으로 변환하는 inference 파이프라인입니다.
+팀의 Text, Image, Tabular 결과를 실제 사용자 interaction과 결합해 Steam 게임 Top-K를
+추천하는 Streamlit 서비스입니다. 이 폴더만 처음 보는 팀원도 실행과 결과 해석을 할 수 있도록
+현재 배포 기준을 정리했습니다.
 
-## Streamlit UI 실행
+## 1분 요약
 
-repository 루트에서 다음 명령을 실행합니다.
+| 항목 | 현재 상태 |
+|---|---|
+| 게임 카탈로그 | Kaggle 기준 50,872개, key는 `app_id` |
+| 기존 사용자 | Positive train history가 있는 49,742명 |
+| 최종 known-user 모델 | **MF 40% + Multimodal 60%** |
+| Multimodal 구성 | MiniLM Text + CLIP Image + SVD Tabular → 64D |
+| 신규 사용자 | 좋아하는 게임은 Multimodal, 태그는 Text, 무입력은 Popularity |
+| Top-K 후처리 | MMR 다양성 reranking, UI 기본 ON |
+| 화면 | Steam 이미지가 포함된 2열 카드, 표, CSV 다운로드 |
+| 배포 진입점 | `recommendation_mvp/app.py` |
+
+## 추천 흐름
+
+```text
+기존 사용자 ID
+  ├─ MF-BPR 협업 점수 ───────────────┐
+  └─ Multimodal-BPR 콘텐츠 점수 ─────┤─ 0.4 : 0.6 결합
+                                      └─ 관측 게임 제외 → MMR → Top-K
+
+신규 사용자
+  ├─ 좋아하는 게임 있음 → 게임들의 Multimodal 64D 평균
+  ├─ 선호 태그 있음      → MiniLM Text 태그 프로필
+  └─ 입력 없음           → Train positive popularity
+                                      └─ MMR → Top-K
+```
+
+Text·Image·Tabular encoder는 추천 시 다시 학습하지 않습니다. 미리 만들어진 game embedding은
+고정하고, 실제 train interaction으로 학습한 user embedding과 내적해 점수를 계산합니다.
+
+## 가장 빠른 실행
+
+repository 루트에서 실행합니다. `recommendation_mvp` 폴더 안으로 이동할 필요가 없습니다.
 
 ```bash
 pip install -r recommendation_mvp/requirements.txt
 streamlit run recommendation_mvp/app.py
 ```
 
-브라우저 화면에서 다음 기능을 사용할 수 있습니다.
+브라우저가 자동으로 열리지 않으면 터미널에 표시된 `http://localhost:8501`로 접속합니다.
 
-- 신규 사용자와 기존 사용자 전환
-- 신규 사용자의 선호 태그 다중 선택
-- 게임명 검색을 통한 좋아하는 게임 최대 5개 선택
-- 기존 사용자의 MF-BPR, Text-BPR, Balanced Hybrid 선택
-- Top-K를 5~30개로 변경
-- 다양성 reranking ON/OFF와 관련성 비중 조정
-- 주요 결과 표와 전체 컬럼 확인
-- 추천 결과 CSV 다운로드
+### Streamlit Cloud
 
-UI의 다양성 옵션은 기본으로 켜져 있습니다. 모델과 embedding은 첫 추천 시 한 번 불러온 뒤
-Streamlit resource cache에서 재사용합니다.
+| 설정 | 값 |
+|---|---|
+| Repository | `Hong-Junki/26_2_Contest` |
+| Branch | `main` |
+| Main file path | `recommendation_mvp/app.py` |
+| Python | **3.12 권장** |
 
-## 팀 공유용 Cloud 배포
+GitHub 변경이 화면에 반영되지 않거나 새 함수의 인자를 인식하지 못하는 `TypeError`가 발생하면
+**Manage app → Reboot app**을 실행합니다. 이는 이전 Python module이 메모리에 남아 있을 때
+발생할 수 있습니다.
 
-이 앱은 Streamlit Community Cloud 배포 구조로 정리돼 있습니다.
+## UI 사용법
 
-- GitHub repository: `Hong-Junki/26_2_Contest`
-- Branch: `main`
-- Entrypoint: `recommendation_mvp/app.py`
-- Requirements: `recommendation_mvp/requirements.txt`
-- Python: 3.12
+### 기존 사용자
 
-Community Cloud에서 배포하면 `https://<app-name>.streamlit.app` 형태의 주소가 생기며 팀원은
-Python 설치 없이 브라우저로 접속할 수 있습니다. Repository가 public이므로 별도 로그인 제한을
-걸지 않으면 URL을 아는 사람 누구나 볼 수 있습니다.
+1. 사이드바에서 `기존 사용자`를 선택합니다.
+2. 학습 데이터에 존재하는 사용자 ID를 입력합니다.
+3. 기본 모델인 `MF + Multimodal Hybrid (recommended)`를 사용합니다.
+4. 필요하면 다른 모델도 함께 선택해 모델별 탭에서 결과를 비교합니다.
 
-배포용 데이터는 `recommendation_mvp/deploy_data/`에 있습니다. 전체 전처리 CSV와 모든 실험
-체크포인트를 올리는 대신 UI용 catalog, 관측 이력, Train popularity, MiniLM embedding,
-seed 42 MF/Text 체크포인트만 사용합니다.
+### 신규 사용자
 
-```bash
-python scripts/build_deployment_artifacts.py
-```
+1. 선호 태그와 좋아하는 게임을 입력합니다. 둘 중 하나만 입력해도 됩니다.
+2. 좋아하는 게임은 최대 5개까지 선택할 수 있습니다.
+3. 아무것도 입력하지 않으면 Train 데이터의 인기 게임을 추천합니다.
 
-Text embedding과 체크포인트는 Git LFS로 관리합니다. Streamlit Community Cloud는 repository의
-LFS 파일을 배포 시 자동으로 내려받습니다.
+추천 결과는 2열 카드로 표시됩니다. 카드에는 이미지, 순위, 게임명, Steam 평가, 긍정 비율,
+가격과 추천 이유가 있습니다. 게임명을 누르면 Steam Store가 새 탭에서 열립니다.
+
+- 최신 Steam 이미지 URL 실패 → legacy CDN URL 재시도
+- 두 이미지 URL 모두 실패 → placeholder 표시
+- `표 형태로 보기` → 기존 테이블 확인
+- `CSV 다운로드` → 전체 추천 결과 저장
 
 ## 제공 모델
 
-| 이름 | 설명 | 적합한 목적 |
+| UI/코드 이름 | 구성 | 용도 |
 |---|---|---|
-| `mf_bpr` | 사용자 ID와 게임 ID의 협업 필터링 점수 | Top-10 진입률 우선 |
-| `text_bpr` | 사용자 취향과 게임 Text embedding의 적합도 | 콘텐츠·long-tail 탐색 |
-| `balanced_hybrid` | MF 20% + Text 80% | 순위 품질과 long-tail의 절충 |
+| `mf_multimodal_hybrid` | MF 40% + Multimodal 60% | **기본 추천 모델** |
+| `multimodal_bpr` | Text + Image + Tabular 고정 game bank | 콘텐츠·long-tail 탐색 |
+| `balanced_hybrid` | MF + Text | 이전 baseline 비교 |
+| `mf_bpr` | 사용자 ID + 게임 ID 협업 필터링 | 인기·협업 신호 비교 |
+| `text_bpr` | MiniLM 기반 Text 콘텐츠 | Text-only 비교 |
 
-Balanced 가중치는 seed 42 validation에서 선택했습니다. Test 성능을 보고 정한 값이 아닙니다.
-MF와 Text 원점수의 범위가 다르므로, 추천 가능한 전체 게임 안에서 사용자·모델별 z-score로
-표준화한 뒤 결합합니다.
+서로 다른 모델의 원점수 범위가 다르기 때문에 사용자별 추천 가능 카탈로그 안에서 z-score로
+표준화한 후 hybrid weight를 적용합니다. 최종 `0.4 / 0.6` 가중치는 test가 아니라 validation
+데이터에서 선택했습니다.
 
-## 빠른 실행
+## 오프라인 성능
 
-repository 루트에서 실행합니다.
+동일한 9,984개 test query, query당 positive 1개 + negative 99개, seed 42/7/2026의
+평균 ± 표본표준편차입니다.
 
-```bash
-pip install -r recommendation_mvp/requirements.txt
+| 모델 | Recall@10 | NDCG@10 | MRR | Long-tail Recall@10 | Coverage@10 |
+|---|---:|---:|---:|---:|---:|
+| **MF + Multimodal** | **0.8165 ± 0.0014** | **0.5609 ± 0.0006** | **0.4898 ± 0.0012** | 0.0341 ± 0.0041 | 0.1133 ± 0.0002 |
+| Multimodal only | 0.8039 ± 0.0013 | 0.5185 ± 0.0008 | 0.4381 ± 0.0008 | **0.2744 ± 0.0031** | **0.1588 ± 0.0007** |
+| 기존 MF + Text | 0.7906 ± 0.0086 | 0.5404 ± 0.0032 | 0.4713 ± 0.0034 | 0.0279 ± 0.0198 | 0.1020 ± 0.0025 |
+| MF only | 0.7960 ± 0.0007 | 0.5372 ± 0.0014 | 0.4656 ± 0.0016 | 0.0000 ± 0.0000 | 0.0974 ± 0.0003 |
 
-python scripts/recommend_users.py \
-  --user-ids 13 7654189 14306011 \
-  --top-k 10 \
-  --output recommendation_mvp/my_recommendations.csv
+MF + Multimodal은 기존 MF + Text보다 Recall@10 `+0.0259`, NDCG@10 `+0.0205`였습니다.
+상세 평가표는 [`../game_fusion/downstream_evaluation/`](../game_fusion/downstream_evaluation/)에
+있습니다.
+
+## 어떤 fusion 파일을 사용하나?
+
+최종 서비스는 다음 파일을 사용합니다.
+
+```text
+game_fusion/emb_game_concat_64.npy
+game_fusion/emb_game_concat_64.csv
 ```
 
-기본적으로 세 모델의 결과가 모두 생성됩니다. Hybrid만 필요하면 다음처럼 실행합니다.
+`emb_game_finetuned_64`와 `emb_game_partial_fusion_tuned_64`는 구조 실행을 확인하기 위해
+synthetic interaction으로 만든 smoke-test 산출물입니다. 실제 interaction 평가에서 frozen
+concat보다 성능이 크게 낮았으므로 **서비스에 사용하지 않습니다.**
+
+## 핵심 파일
+
+| 경로 | 역할 |
+|---|---|
+| `app.py` | Streamlit 화면과 이미지 카드 |
+| `config.json` | 기본 모델·artifact 설정 |
+| `deploy_data/` | UI용 catalog, 관측 이력, Train popularity |
+| `model_artifacts/` | 실제 interaction으로 학습한 Multimodal user tower |
+| `../mvp_recommendation/inference.py` | 기존 사용자 full-catalog scoring |
+| `../mvp_recommendation/cold_start.py` | 신규 사용자 프로필과 추천 |
+| `../mvp_recommendation/reranking.py` | MMR 다양성 reranking |
+| `../scripts/evaluate_multimodal_game_bpr.py` | 실제 interaction downstream 평가 |
+| `../scripts/validate_multimodal_pipeline.py` | 배포 artifact와 추천 경로 검증 |
+
+대용량 `.pt`와 일부 `.npy`는 Git LFS로 관리합니다. clone 후 파일 내용이 LFS pointer로만
+보이면 `git lfs pull`을 실행합니다.
+
+## CLI 사용
+
+기존 사용자:
 
 ```bash
 python scripts/recommend_users.py \
   --user-ids 13 \
-  --models balanced_hybrid \
-  --top-k 20 \
-  --output recommendation_mvp/user_13_hybrid_top20.csv
+  --models mf_multimodal_hybrid multimodal_bpr \
+  --top-k 10 \
+  --output outputs/user_13_multimodal.csv
 ```
 
-CPU에서 대표 사용자 3명과 세 모델의 Top-10을 생성하는 데 약 6초가 걸렸습니다. Text 게임
-타워의 50,872개 출력을 실행마다 한 번 계산하며, 그 뒤 사용자별 점수는 행렬곱으로 계산합니다.
+신규 사용자:
 
-## 관측 게임 제외
+```bash
+python scripts/recommend_new_user.py \
+  --profile-name witcher_fan \
+  --preferred-tags RPG "Open World" \
+  --liked-app-ids 292030 \
+  --top-k 10 \
+  --output outputs/witcher_fan.csv
+```
 
-기본 `--history-scope all`은 train, validation, test에 기록된 게임을 모두 제외합니다. 이미 알고
-있는 전체 리뷰 이력으로 실제 추천 목록을 만들 때 적합합니다.
+각 실행은 CSV와 함께 실행 조건을 담은 `.manifest.json`을 생성합니다.
 
-| 옵션 | 제외 범위 | 용도 |
-|---|---|---|
-| `train` | Train만 | 과거 시점 기반 분석 |
-| `train_validation` | Train + Validation | Test 직전 시점 분석 |
-| `all` | Train + Validation + Test | 현재까지 알려진 게임을 모두 제외한 실제 추천 |
-
-Offline 성능 평가는 이 CLI가 아니라 고정 test candidate 평가 스크립트를 사용해야 합니다.
-`all` 옵션은 test 게임도 제외하므로 Recall@K 평가용으로 사용하면 안 됩니다.
-
-## 출력 컬럼
+## 주요 출력 컬럼
 
 | 컬럼 | 설명 |
 |---|---|
-| `user_id` | 추천 대상 사용자 ID |
-| `model` | `mf_bpr`, `text_bpr`, `balanced_hybrid` 중 하나 |
-| `rank` | 해당 사용자·모델 안의 추천 순위 |
 | `app_id`, `title` | Steam 게임 ID와 게임명 |
-| `tags_text` | 확인용 Steam 태그 문자열 |
-| `rating`, `positive_ratio`, `user_reviews`, `price_final` | 추천 게임 확인용 메타데이터 |
-| `score` | 해당 모델의 최종 순위 점수. 사용자 간 절댓값 비교는 금지 |
-| `mf_score_z`, `text_score_z` | 추천 가능 카탈로그 내 표준화된 각 모델 점수 |
-| `mf_catalog_rank`, `text_catalog_rank` | 각 단일 모델에서의 전체 미관측 카탈로그 순위 |
-| `recommendation_source` | collaborative, content, 두 신호 합의 또는 우세 신호 |
-| `recommendation_reason` | 팀원이 읽기 쉬운 신호 수준의 설명 |
-| `alpha_mf`, `alpha_text` | 실제 점수 결합 가중치 |
-| `excluded_history_scope` | 추천에서 제외한 이력 범위 |
+| `rank`, `score` | 해당 사용자·모델 내 순위와 점수 |
+| `model` | 추천에 사용한 모델 |
+| `mf_score_z` | 표준화된 협업 점수 |
+| `multimodal_score_z` | 표준화된 멀티모달 점수 |
+| `recommendation_reason` | 사용한 추천 신호를 요약한 설명 |
+| `alpha_mf`, `alpha_multimodal` | hybrid 결합 가중치 |
+| `excluded_history_scope` | 추천에서 제외한 interaction 범위 |
 
-`recommendation_reason`은 모델 신호를 요약한 휴리스틱 설명입니다. 특정 태그가 추천을
-인과적으로 만들었다는 설명이나 정교한 explainable AI 결과는 아닙니다.
+`recommendation_reason`은 모델 신호를 읽기 쉽게 요약한 휴리스틱이며 인과적 XAI 설명은
+아닙니다.
 
-## 생성 파일
-
-- `sample_recommendations.csv`: 사용자 3명 × 모델 3개 × Top-10 = 90행 예시
-- `sample_recommendations.manifest.json`: 실행 조건과 가중치
-- `config.json`: 기본 artifact 경로와 모델 설정
-- `requirements.txt`: inference 실행에 필요한 최소 패키지
-
-각 실행은 요청한 CSV 옆에 같은 이름의 `.manifest.json`도 생성합니다.
-
-## 현재 지원 범위와 주의사항
-
-- Positive train history가 있는 49,742명의 기존 사용자만 지원합니다.
-- 학습에 없는 신규 사용자 ID는 명확한 오류와 함께 중단합니다.
-- MF는 학습된 게임 ID에 의존합니다. 신규 게임은 별도 Text-only 경로가 필요합니다.
-- Balanced α는 seed별 변동성이 있었으므로 모델을 재학습하면 validation에서 다시 선택해야 합니다.
-- Sampled-candidate 평가에서 선택한 α를 전체 카탈로그 표준화에 적용한 MVP입니다. 서비스 배포
-  전에는 full-catalog validation 또는 실제 A/B test로 가중치를 다시 검증하는 것이 안전합니다.
-- 추천 결과는 offline 데이터 기반이므로 실제 만족도는 온라인 피드백으로 검증해야 합니다.
-
-## 신규 사용자 Cold-start
-
-학습에 없는 사용자는 사용자 ID embedding이 없으므로 MF-BPR를 바로 적용하지 않습니다. 대신
-간단한 온보딩 입력에 따라 다음 두 경로 중 하나를 사용합니다.
-
-| 신규 사용자 입력 | 추천 방식 |
-|---|---|
-| 선호 태그 또는 좋아하는 게임 있음 | MiniLM 게임 embedding 취향 프로필 85% + Train Popularity 15% |
-| 아무 선호 정보 없음 | Train positive interaction Popularity 100% |
-
-선호 태그가 있으면 추천 결과는 입력 태그 중 최소 하나와 직접 일치하는 게임으로 제한합니다.
-좋아한다고 입력한 게임은 프로필 생성에 사용한 후 최종 추천에서 제외합니다. Popularity는
-validation/test가 아니라 train의 `is_recommended=True` 횟수만 사용합니다.
-
-### 선호 정보를 입력한 신규 사용자
+## 검증 명령
 
 ```bash
-python scripts/recommend_new_user.py \
-  --profile-name rpg_new_user \
-  --preferred-tags RPG "Open World" "Story Rich" \
-  --liked-app-ids 292030 \
-  --top-k 10 \
-  --output recommendation_mvp/new_user_rpg_top10.csv
+python scripts/validate_multimodal_pipeline.py
+python scripts/validate_recommendation_pipeline.py
+python scripts/validate_cold_start_pipeline.py
+python scripts/validate_diversity_reranking.py
 ```
 
-여러 선호 태그와 좋아하는 게임을 동시에 입력할 수 있습니다. 각 입력은 같은 비중으로 프로필
-평균에 반영됩니다. `--content-weight`로 콘텐츠와 인기도 비중을 바꿀 수 있지만 기본값 0.85는
-MVP 휴리스틱이며 offline ground truth로 최적화된 값은 아닙니다.
+모든 검증이 `*_OK`로 끝나야 합니다.
 
-### 아무 정보가 없는 신규 사용자
+## 해석 시 주의사항과 다음 단계
 
-```bash
-python scripts/recommend_new_user.py \
-  --profile-name anonymous_new_user \
-  --top-k 10 \
-  --output recommendation_mvp/new_user_popular_top10.csv
-```
-
-### 사용할 수 있는 태그
-
-`available_tags.csv`에 441개 Steam 태그와 해당 게임 수가 정리돼 있습니다. 다음 옵션으로 다시
-생성할 수도 있습니다.
-
-```bash
-python scripts/recommend_new_user.py \
-  --profile-name tag_export \
-  --top-k 1 \
-  --save-available-tags recommendation_mvp/available_tags.csv
-```
-
-태그는 대소문자를 무시하고 정확히 매칭합니다. 존재하지 않는 태그는 유사한 태그 후보를 보여
-주고 중단하므로 오타가 조용히 무시되지 않습니다.
-
-### Cold-start 출력 컬럼
-
-| 컬럼 | 설명 |
-|---|---|
-| `profile_name` | 실제 user ID가 생기기 전 임시 프로필 이름 |
-| `score` | 콘텐츠와 인기도를 결합한 최종 점수 |
-| `content_score_z` | 추천 가능 게임 내 MiniLM 프로필 유사도 표준점수 |
-| `popularity_score_z` | Train positive count의 log 변환 표준점수 |
-| `train_positive_count` | 해당 게임의 Train 긍정 interaction 수 |
-| `cold_start_method` | 선호 기반 또는 무입력 fallback 경로 |
-| `preferred_tags`, `matched_preferred_tags` | 입력 태그와 게임에 실제 매칭된 태그 |
-| `liked_app_ids`, `nearest_liked_title` | 입력한 seed 게임과 가장 가까운 seed 게임명 |
-| `recommendation_reason` | 사용한 신호를 요약한 휴리스틱 설명 |
-
-샘플은 `sample_new_user_preferences.csv`와 `sample_new_user_popularity.csv`에 있습니다.
-Cold-start 추천의 실제 사용자 만족도는 상호작용 전에는 계산할 수 없으므로, 서비스에서는 클릭·
-찜·플레이가 쌓이면 known-user Hybrid로 전환하는 정책이 필요합니다.
-
-## 다양성 reranking
-
-같은 시리즈·DLC·의미가 매우 유사한 게임이 Top-K를 반복 점유하는 문제를 줄이기 위해 MMR
-(Maximal Marginal Relevance)을 적용했습니다.
-
-```text
-MMR = 0.65 × 원래 추천 관련성 - 0.35 × 기존 선택 게임과의 최대 중복도
-```
-
-중복도는 다음 두 값 중 큰 값을 사용합니다.
-
-- MiniLM 게임 embedding cosine similarity
-- 정규화된 게임명 token Jaccard similarity
-
-원래 Top-K만 재배열하면 새로운 게임을 가져올 수 없으므로 기본적으로 `Top-K × 10` 후보를
-먼저 생성한 뒤 그 안에서 Top-K를 다시 선택합니다. UI에서는 기본 ON이고, CLI에서는 명시적으로
-`--diversity`를 전달해야 합니다.
-
-```bash
-python scripts/recommend_new_user.py \
-  --profile-name rpg_new_user \
-  --preferred-tags RPG "Open World" "Story Rich" \
-  --liked-app-ids 292030 \
-  --top-k 10 \
-  --diversity \
-  --diversity-lambda 0.65 \
-  --output recommendation_mvp/new_user_rpg_diverse_top10.csv
-```
-
-Witcher 선호 샘플 비교:
-
-| 지표 | 원본 Top-10 | MMR Top-10 |
-|---|---:|---:|
-| 평균 원본 추천 점수 | 2.2938 | 2.2880 |
-| 평균 item 간 cosine | 0.5983 | 0.5906 |
-| 제목 중복도가 높은 pair | 1 | 0 |
-
-평균 추천 점수는 99.74% 유지하면서 `Hearts of Stone`과 `Expansion Pass`가 함께 Top-10을
-점유하던 중복 pair를 제거했습니다. 이는 한 개 샘플 프로필의 sanity check이며 전체 사용자의
-온라인 품질 향상을 증명하는 결과는 아닙니다.
-
-Reranking이 적용된 출력에는 `original_rank`, `rerank_score`, `redundancy_penalty`,
-`diversity_lambda`가 추가됩니다. 관련 산출물은 `sample_new_user_diverse.csv`,
-`diversity_comparison.csv`, `diversity_summary.json`입니다.
+- 현재 평가는 sampled candidate 기반이며 full-catalog offline 평가는 아직 남아 있습니다.
+- 실제 만족도는 클릭·찜·플레이 로그 또는 사용자 설문으로 검증해야 합니다.
+- 신규 사용자 태그-only 경로에는 이미지 정보가 없으므로 Text 중심으로 동작합니다.
+- 이미지가 없는 소수 게임은 fusion 제작 단계의 대체 벡터 정책을 따릅니다.
+- interaction 또는 game bank를 다시 만들면 validation에서 hybrid weight도 다시 선택해야 합니다.
+- `.npy`와 대응 `.csv`의 `app_id` 행 순서는 절대 따로 변경하지 않습니다.

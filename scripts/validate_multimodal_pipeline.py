@@ -38,6 +38,9 @@ def main() -> None:
     assert known_result.shape[0] == 10
     assert known_result.groupby("model").app_id.nunique().eq(5).all()
     assert known_result.multimodal_score_z.notna().all()
+    hybrid_rows = known_result.model.eq("mf_multimodal_hybrid")
+    assert known_result.loc[hybrid_rows, "alpha_mf"].eq(0.4).all()
+    assert known_result.loc[hybrid_rows, "alpha_multimodal"].eq(0.6).all()
 
     cold = ColdStartRecommendationPipeline(
         text_prefix=ROOT / "text_data" / "emb_text_minilm",
