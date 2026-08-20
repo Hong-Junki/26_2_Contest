@@ -30,6 +30,7 @@ class ColdStartRecommendationPipeline:
         catalog_path: Path,
         train_path: Path | None,
         popularity_path: Path | None = None,
+        multimodal_prefix: Path | None = None,
     ) -> None:
         text_index = pd.read_csv(text_prefix.with_suffix(".csv"))
         assert np.array_equal(text_index.row.to_numpy(), np.arange(len(text_index)))
@@ -44,6 +45,17 @@ class ColdStartRecommendationPipeline:
         assert np.isfinite(self.text_items).all()
         sample_norms = np.linalg.norm(self.text_items[::1000], axis=1)
         assert np.allclose(sample_norms, 1.0, atol=1e-4)
+
+        self.multimodal_items: np.ndarray | None = None
+        if multimodal_prefix is not None:
+            multimodal_index = pd.read_csv(multimodal_prefix.with_suffix(".csv"))
+            assert np.array_equal(self.app_ids, multimodal_index.app_id.to_numpy(np.int64))
+            multimodal_items = np.load(
+                multimodal_prefix.with_suffix(".npy"), allow_pickle=False, mmap_mode="r"
+            )
+            assert multimodal_items.shape == (len(text_index), 64)
+            assert np.isfinite(multimodal_items).all()
+            self.multimodal_items = multimodal_items
 
         catalog = (
             pd.read_parquet(catalog_path)
@@ -148,16 +160,43 @@ class ColdStartRecommendationPipeline:
             )
         popularity_z = self._zscore(self.popularity_raw, available)
 
-        profile_parts = [self.text_items[self.app_to_row[app_id]] for app_id in liked]
+        text_profile_parts: list[np.ndarray] = []
         for tag in tags:
             tag_rows = self._tag_rows[tag.casefold()]
-            profile_parts.append(self._normalize(self.text_items[tag_rows].mean(axis=0)))
-        has_preferences = bool(profile_parts)
+            text_profile_parts.append(self._normalize(self.text_items[tag_rows].mean(axis=0)))
+        # Liked games can use all three modalities. Tags have no standalone
+        # image/tabular vector, so tag-only onboarding intentionally remains Text-based.
+        multimodal_profile_parts = (
+            [self.multimodal_items[self.app_to_row[app_id]] for app_id in liked]
+            if liked and self.multimodal_items is not None
+            else []
+        )
+        if liked and self.multimodal_items is None:
+            text_profile_parts.extend(
+                self.text_items[self.app_to_row[app_id]] for app_id in liked
+            )
+        has_preferences = bool(text_profile_parts or multimodal_profile_parts)
         if has_preferences:
-            profile = self._normalize(np.stack(profile_parts).mean(axis=0))
-            content_z = self._zscore(self.text_items @ profile, available)
+            content_components: list[np.ndarray] = []
+            if text_profile_parts:
+                text_profile = self._normalize(np.stack(text_profile_parts).mean(axis=0))
+                content_components.append(self._zscore(self.text_items @ text_profile, available))
+            if multimodal_profile_parts:
+                assert self.multimodal_items is not None
+                multimodal_profile = self._normalize(
+                    np.stack(multimodal_profile_parts).mean(axis=0)
+                )
+                content_components.append(
+                    self._zscore(self.multimodal_items @ multimodal_profile, available)
+                )
+            content_z = np.mean(np.stack(content_components), axis=0)
             final_score = content_weight * content_z + (1.0 - content_weight) * popularity_z
-            method = "minilm_preferences_plus_train_popularity"
+            if multimodal_profile_parts and text_profile_parts:
+                method = "multimodal_liked_games_plus_text_tags_plus_train_popularity"
+            elif multimodal_profile_parts:
+                method = "multimodal_liked_games_plus_train_popularity"
+            else:
+                method = "minilm_preferences_plus_train_popularity"
         else:
             content_z = np.full(len(self.catalog), np.nan, dtype=np.float64)
             final_score = popularity_z
@@ -182,20 +221,29 @@ class ColdStartRecommendationPipeline:
             matched_tags = [tag for tag in tags if tag in game_tags]
             nearest_title = ""
             if liked:
-                similarities = [
-                    float(self.text_items[row] @ self.text_items[self.app_to_row[app_id]])
-                    for app_id in liked
-                ]
+                similarity_bank = (
+                    self.multimodal_items
+                    if self.multimodal_items is not None
+                    else self.text_items
+                )
+                similarities = [float(
+                    similarity_bank[row] @ similarity_bank[self.app_to_row[app_id]]
+                ) for app_id in liked]
                 nearest_id = liked[int(np.argmax(similarities))]
                 nearest_title = str(self.catalog.at[self.app_to_row[nearest_id], "title"])
+            liked_similarity_label = (
+                "텍스트·이미지·정형 특성"
+                if self.multimodal_items is not None
+                else "텍스트 특성"
+            )
             if not has_preferences:
                 reason = "Train 긍정 평가가 많은 인기 게임"
             elif matched_tags and nearest_title:
-                reason = f"선호 태그 {', '.join(matched_tags)} 및 {nearest_title}와 텍스트 특성이 유사"
+                reason = f"선호 태그 {', '.join(matched_tags)} 및 {nearest_title}와 {liked_similarity_label}이 유사"
             elif matched_tags:
                 reason = f"선호 태그 {', '.join(matched_tags)}와 일치"
             elif nearest_title:
-                reason = f"{nearest_title}와 텍스트 특성이 유사"
+                reason = f"{nearest_title}와 {liked_similarity_label}이 유사"
             else:
                 reason = "입력한 선호 태그의 전체 Text 프로필과 유사"
             metadata = self.catalog.loc[row, metadata_columns].to_dict()

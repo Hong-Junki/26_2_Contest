@@ -1,5 +1,13 @@
 # 26_2_Contest
 
+## Multimodal recommendation update
+
+Text + CLIP image + tabular game embedding을 실제 interaction 기반 BPR 및 MF hybrid에
+연결했습니다. 실행법과 3-seed 결과는
+[`recommendation_mvp/README_MULTIMODAL.md`](./recommendation_mvp/README_MULTIMODAL.md),
+상세 downstream 평가는
+[`game_fusion/downstream_evaluation/`](./game_fusion/downstream_evaluation/)에서 확인할 수 있습니다.
+
 ## Data processing
 
 Steam 게임 추천용 통합 데이터, 전처리 코드, 컬럼 설명서는 [`Data_process/`](./Data_process/)에서 확인할 수 있습니다.

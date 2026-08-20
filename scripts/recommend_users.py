@@ -14,7 +14,10 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from mvp_recommendation.inference import KnownUserRecommendationPipeline, MODEL_NAMES  # noqa: E402
+from mvp_recommendation.inference import (  # noqa: E402
+    ALL_MODEL_NAMES,
+    KnownUserRecommendationPipeline,
+)
 from mvp_recommendation.reranking import mmr_rerank  # noqa: E402
 
 
@@ -22,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--user-ids", nargs="+", type=int, required=True)
     parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--models", nargs="+", choices=MODEL_NAMES, default=list(MODEL_NAMES))
+    parser.add_argument("--models", nargs="+", choices=ALL_MODEL_NAMES, default=list(ALL_MODEL_NAMES))
     parser.add_argument("--output", type=Path, default=Path("outputs/final_recommendations.csv"))
     parser.add_argument(
         "--checkpoint-dir",
@@ -49,6 +52,18 @@ def parse_args() -> argparse.Namespace:
         "--tabular-prefix",
         type=Path,
         default=REPO_ROOT / "tabular_embedding" / "leakage_safe" / "emb_tabular_safe_svd64",
+    )
+    parser.add_argument(
+        "--multimodal-prefix", type=Path,
+        default=REPO_ROOT / "game_fusion" / "emb_game_concat_64",
+    )
+    parser.add_argument(
+        "--multimodal-checkpoint", type=Path,
+        default=REPO_ROOT / "recommendation_mvp" / "model_artifacts" / "frozen_multimodal_user_bpr_seed42.pt",
+    )
+    parser.add_argument(
+        "--multimodal-summary", type=Path,
+        default=REPO_ROOT / "recommendation_mvp" / "model_artifacts" / "multimodal_evaluation_summary_seed42.json",
     )
     parser.add_argument(
         "--history-scope", choices=["train", "train_validation", "all"], default="all"
@@ -80,6 +95,9 @@ def main() -> None:
         device=device,
         batch_size=args.batch_size,
         history_scope=args.history_scope,
+        multimodal_prefix=args.multimodal_prefix,
+        multimodal_checkpoint=args.multimodal_checkpoint,
+        multimodal_summary_path=args.multimodal_summary,
     )
     pool_k = args.top_k * args.candidate_multiplier if args.diversity else args.top_k
     result = pipeline.recommend(args.user_ids, top_k=pool_k, models=args.models)
@@ -103,6 +121,7 @@ def main() -> None:
         "history_scope": args.history_scope,
         "hybrid_alpha_mf": pipeline.alpha_mf,
         "hybrid_alpha_text": pipeline.alpha_text,
+        "hybrid_alpha_multimodal_mf": pipeline.alpha_multimodal_mf,
         "device": device,
         "diversity": args.diversity,
         "diversity_lambda": args.diversity_lambda if args.diversity else None,

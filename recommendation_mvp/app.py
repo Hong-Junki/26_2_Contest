@@ -26,6 +26,13 @@ CATALOG_PATH = DEPLOY_DATA_DIR / "catalog_ui.parquet"
 HISTORY_PATH = DEPLOY_DATA_DIR / "seen_history_all.parquet"
 POPULARITY_PATH = DEPLOY_DATA_DIR / "train_positive_counts.csv"
 TEXT_PREFIX = REPO_ROOT / "text_data" / "emb_text_minilm"
+MULTIMODAL_PREFIX = REPO_ROOT / "game_fusion" / "emb_game_concat_64"
+MULTIMODAL_CHECKPOINT = (
+    REPO_ROOT / "recommendation_mvp" / "model_artifacts" / "frozen_multimodal_user_bpr_seed42.pt"
+)
+MULTIMODAL_SUMMARY = (
+    REPO_ROOT / "recommendation_mvp" / "model_artifacts" / "multimodal_evaluation_summary_seed42.json"
+)
 
 
 @st.cache_data(show_spinner=False)
@@ -52,6 +59,9 @@ def load_known_pipeline() -> KnownUserRecommendationPipeline:
         history_path=HISTORY_PATH,
         device="cpu",
         history_scope="all",
+        multimodal_prefix=MULTIMODAL_PREFIX,
+        multimodal_checkpoint=MULTIMODAL_CHECKPOINT,
+        multimodal_summary_path=MULTIMODAL_SUMMARY,
     )
 
 
@@ -62,6 +72,7 @@ def load_cold_pipeline() -> ColdStartRecommendationPipeline:
         catalog_path=CATALOG_PATH,
         train_path=None,
         popularity_path=POPULARITY_PATH,
+        multimodal_prefix=MULTIMODAL_PREFIX,
     )
 
 
@@ -115,6 +126,8 @@ def known_user_form(top_k: int, diversity: bool, diversity_lambda: float) -> Non
     st.caption("학습 시점에 positive Train 이력이 있는 49,742명의 사용자용입니다.")
     user_id = st.number_input("사용자 ID", min_value=0, step=1, value=13)
     model_labels = {
+        "MF + Multimodal Hybrid (recommended)": "mf_multimodal_hybrid",
+        "Multimodal BPR": "multimodal_bpr",
         "Balanced Hybrid": "balanced_hybrid",
         "MF-BPR": "mf_bpr",
         "Text-BPR": "text_bpr",
@@ -122,7 +135,7 @@ def known_user_form(top_k: int, diversity: bool, diversity_lambda: float) -> Non
     selected_labels = st.multiselect(
         "비교할 모델",
         options=list(model_labels),
-        default=["Balanced Hybrid"],
+        default=["MF + Multimodal Hybrid (recommended)"],
     )
     if st.button("기존 사용자 추천받기", type="primary", width="stretch"):
         if not selected_labels:
@@ -139,7 +152,11 @@ def known_user_form(top_k: int, diversity: bool, diversity_lambda: float) -> Non
             if diversity:
                 result = mmr_rerank(
                     result,
-                    pipeline.text_bank.numpy(),
+                    (
+                        pipeline.multimodal_bank.numpy()
+                        if pipeline.multimodal_bank is not None
+                        else pipeline.text_bank.numpy()
+                    ),
                     pipeline.app_to_row,
                     top_k=top_k,
                     lambda_relevance=diversity_lambda,
@@ -198,7 +215,11 @@ def new_user_form(
             if diversity:
                 result = mmr_rerank(
                     result,
-                    pipeline.text_items,
+                    (
+                        pipeline.multimodal_items
+                        if pipeline.multimodal_items is not None and selected_games
+                        else pipeline.text_items
+                    ),
                     pipeline.app_to_row,
                     top_k=top_k,
                     lambda_relevance=diversity_lambda,

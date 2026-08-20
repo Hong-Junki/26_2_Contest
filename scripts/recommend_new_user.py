@@ -30,6 +30,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--catalog", type=Path, default=REPO_ROOT / "text_data" / "games_text_ready.csv")
     parser.add_argument("--text-prefix", type=Path, default=REPO_ROOT / "text_data" / "emb_text_minilm")
+    parser.add_argument(
+        "--multimodal-prefix", type=Path,
+        default=REPO_ROOT / "game_fusion" / "emb_game_concat_64",
+    )
     parser.add_argument("--save-available-tags", type=Path, default=None)
     parser.add_argument("--diversity", action="store_true")
     parser.add_argument("--diversity-lambda", type=float, default=0.65)
@@ -43,6 +47,7 @@ def main() -> None:
         text_prefix=args.text_prefix,
         catalog_path=args.catalog,
         train_path=args.train_path,
+        multimodal_prefix=args.multimodal_prefix,
     )
     if args.save_available_tags is not None:
         args.save_available_tags.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +82,7 @@ def main() -> None:
         "effective_method": result.cold_start_method.iloc[0],
         "effective_content_weight": float(result.content_weight.iloc[0]),
         "top_k": args.top_k,
-        "embedding": "all-MiniLM-L6-v2 item-to-item cosine profile",
+        "embedding": "frozen multimodal liked-game profile; MiniLM tag profile",
         "diversity": args.diversity,
         "diversity_lambda": args.diversity_lambda if args.diversity else None,
         "candidate_multiplier": args.candidate_multiplier if args.diversity else None,

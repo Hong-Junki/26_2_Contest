@@ -133,6 +133,52 @@ class BPRRecommender(nn.Module):
         return positive, negative
 
 
+class FixedGameEmbeddingBPR(nn.Module):
+    """Train a user tower against a fixed, precomputed game embedding bank.
+
+    The game bank is deliberately a non-persistent buffer.  Checkpoints therefore
+    contain the learned user embeddings and an artifact fingerprint, while the
+    comparatively large game bank remains the single source of truth on disk.
+    """
+
+    def __init__(self, num_users: int, game_bank: torch.Tensor) -> None:
+        super().__init__()
+        if game_bank.ndim != 2:
+            raise ValueError("game_bank must be a 2D tensor")
+        if not torch.isfinite(game_bank).all():
+            raise ValueError("game_bank contains NaN or Inf")
+        self.user_encoder = IDUserEncoder(num_users, int(game_bank.shape[1]))
+        self.register_buffer("game_bank", game_bank.float(), persistent=False)
+
+    def score(
+        self,
+        user_idx: torch.Tensor,
+        item_rows: torch.Tensor,
+        tabular: torch.Tensor | None = None,
+        text: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        user = self.user_encoder(user_idx)
+        game = self.game_bank[item_rows]
+        scores = (user * game).sum(dim=-1)
+        assert torch.isfinite(scores).all(), "fixed-game BPR score contains NaN/Inf"
+        return scores
+
+    def pair_scores(
+        self,
+        user_idx: torch.Tensor,
+        positive_rows: torch.Tensor,
+        negative_rows: torch.Tensor,
+        positive_tabular: torch.Tensor | None = None,
+        positive_text: torch.Tensor | None = None,
+        negative_tabular: torch.Tensor | None = None,
+        negative_text: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            self.score(user_idx, positive_rows),
+            self.score(user_idx, negative_rows),
+        )
+
+
 def bpr_loss(positive_scores: torch.Tensor, negative_scores: torch.Tensor) -> torch.Tensor:
     difference = positive_scores - negative_scores
     assert torch.isfinite(difference).all()
